@@ -7,15 +7,6 @@ enum Sbrk {
     Eager,
     Lazy,
 }
-// #include "param.h"
-// #include "types.h"
-// #include "memlayout.h"
-// #include "elf.h"
-// #include "riscv.h"
-// #include "defs.h"
-// #include "spinlock.h"
-// #include "proc.h"
-// #include "fs.h"
 
 unsafe extern "C" {
     // kernel.ld sets this to end of kernel code.

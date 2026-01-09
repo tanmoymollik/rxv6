@@ -1,0 +1,7 @@
+{
+    // Specify the custom target triple for analysis
+    "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
+    "files.watcherExclude": {
+        "**/target": true
+    },
+}

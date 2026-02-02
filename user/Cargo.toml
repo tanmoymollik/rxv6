@@ -1,0 +1,17 @@
+[package]
+name = "user"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "prog0"
+path = "src/bin/prog0.rs"
+harness = false
+
+[[bin]]
+name = "prog1"
+path = "src/bin/prog1.rs"
+harness = false
+
+[dependencies]
+kernelapi = { path = "../kernelapi" }

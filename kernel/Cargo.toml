@@ -1,0 +1,13 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "kernel"
+path = "src/start.rs"
+harness = false
+
+[dependencies]
+paste = "1.0.15"
+kernelapi = { path = "../kernelapi" }

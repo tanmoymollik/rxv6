@@ -79,26 +79,31 @@ pub fn virtio_disk_init() {
         DISK.avail = VirtqStructList::new(alloc());
         DISK.used = VirtqStructList::new(alloc());
 
-        write_reg(VIRTIO_MMIO_QUEUE_DESC_LOW, DISK.desc.page.get_addr() as u32);
+        // Get raw pointer to satisfy rust compiler.
+        let disk = &raw mut DISK as *mut Disk;
+        write_reg(
+            VIRTIO_MMIO_QUEUE_DESC_LOW,
+            (*disk).desc.page.get_addr() as u32,
+        );
         write_reg(
             VIRTIO_MMIO_QUEUE_DESC_HIGH,
-            (DISK.desc.page.get_addr() >> 32) as u32,
+            ((*disk).desc.page.get_addr() >> 32) as u32,
         );
         write_reg(
             VIRTIO_MMIO_DRIVER_DESC_LOW,
-            DISK.avail.page.get_addr() as u32,
+            (*disk).avail.page.get_addr() as u32,
         );
         write_reg(
             VIRTIO_MMIO_DRIVER_DESC_HIGH,
-            (DISK.avail.page.get_addr() >> 32) as u32,
+            ((*disk).avail.page.get_addr() >> 32) as u32,
         );
         write_reg(
             VIRTIO_MMIO_DEVICE_DESC_LOW,
-            DISK.used.page.get_addr() as u32,
+            (*disk).used.page.get_addr() as u32,
         );
         write_reg(
             VIRTIO_MMIO_DEVICE_DESC_HIGH,
-            (DISK.used.page.get_addr() >> 32) as u32,
+            ((*disk).used.page.get_addr() >> 32) as u32,
         );
 
         // All NUM descriptors start out unused.

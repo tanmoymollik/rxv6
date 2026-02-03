@@ -1,3 +1,6 @@
+/// Driver for qemu's virtio disk device. Uses qemu's mmio interface to virtio.
+mod constants;
+
 use crate::arch::{self, Arch, CurrentArch};
 use crate::buf::Buf;
 use crate::channel::Channel;
@@ -5,17 +8,12 @@ use crate::kalloc::{PhysPage, kalloc};
 use crate::memlayout;
 use crate::proc::{sleep, wakeup};
 use crate::spinlock::{Spinlock, SpinlockToken};
+use constants::*;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::sync::atomic::Ordering;
 use core::sync::atomic::fence;
 use kernelapi::fs::BSIZE;
-
-/// Virtio device definitions for both the mmio interface and virtio
-/// descriptors. Only tested with qemu.
-///
-/// The virtio spec:
-/// https://docs.oasis-open.org/virtio/virtio/v1.1/virtio-v1.1.pdf
 
 pub fn virtio_disk_init() {
     if read_reg(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976
@@ -119,137 +117,140 @@ pub fn virtio_disk_init() {
     // plic.rs and trap.rs arrange for interrupts from `VIRTIO0_IRQ`.
 }
 
-// Virtio mmio control registers, mapped starting at 0x10001000, from qemu's
-// virtio_mmio.h
-// Magic number - 0x74726976
-const VIRTIO_MMIO_MAGIC_VALUE: usize = 0x000;
-// Version: should be 2.
-const VIRTIO_MMIO_VERSION: usize = 0x004;
-// Device type; 1 is net, 2 is disk.
-const VIRTIO_MMIO_DEVICE_ID: usize = 0x008;
-// Should be 0x554d4551.
-const VIRTIO_MMIO_VENDOR_ID: usize = 0x00c;
-const VIRTIO_MMIO_DEVICE_FEATURES: usize = 0x010;
-const VIRTIO_MMIO_DRIVER_FEATURES: usize = 0x020;
-// Select queue, write-only.
-const VIRTIO_MMIO_QUEUE_SEL: usize = 0x030;
-// Max size of current queue, read-only.
-const VIRTIO_MMIO_QUEUE_NUM_MAX: usize = 0x034;
-// Size of current queue, write-only.
-const VIRTIO_MMIO_QUEUE_NUM: usize = 0x038;
-// Ready bit.
-const VIRTIO_MMIO_QUEUE_READY: usize = 0x044;
-const VIRTIO_MMIO_QUEUE_NOTIFY: usize = 0x050; // write-only
-const VIRTIO_MMIO_INTERRUPT_STATUS: usize = 0x060; // read-only
-const VIRTIO_MMIO_INTERRUPT_ACK: usize = 0x064; // write-only
-const VIRTIO_MMIO_STATUS: usize = 0x070; // read/write
-// Physical address for descriptor table divided into two 32-bit registers,
-// write-only.
-const VIRTIO_MMIO_QUEUE_DESC_LOW: usize = 0x080;
-const VIRTIO_MMIO_QUEUE_DESC_HIGH: usize = 0x084;
-// Physical address for available ring divided into two 32-bit registers,
-// write-only.
-const VIRTIO_MMIO_DRIVER_DESC_LOW: usize = 0x090;
-const VIRTIO_MMIO_DRIVER_DESC_HIGH: usize = 0x094;
-// Physical address for used ring divided into two 32-bit registers,
-// write-only.
-const VIRTIO_MMIO_DEVICE_DESC_LOW: usize = 0x0a0;
-const VIRTIO_MMIO_DEVICE_DESC_HIGH: usize = 0x0a4;
+pub fn virtio_disk_rw(buf: *mut Buf, write: bool) {
+    let sector = unsafe { ((*buf).blockno as usize * (BSIZE / SSIZE)) as u64 };
+    let disk = &raw mut DISK;
+    let tk = unsafe { (*disk).lock.acquire() };
 
-// Status register bits, from qemu's virtio_config.h
-const VIRTIO_CONFIG_S_ACKNOWLEDGE: u32 = 1;
-const VIRTIO_CONFIG_S_DRIVER: u32 = 2;
-const VIRTIO_CONFIG_S_DRIVER_OK: u32 = 4;
-const VIRTIO_CONFIG_S_FEATURES_OK: u32 = 8;
+    // The virtio spec's Section 5.2 says that legacy block operations use
+    // three descriptors: one for type/reserved/sector, one for the data,
+    // one for a 1-byte status result.
 
-// Device feature bits.
-// Disk is read-only.
-const VIRTIO_BLK_F_RO: usize = 5;
-// Supports scsi command passthrough.
-const VIRTIO_BLK_F_SCSI: usize = 7;
-// Writeback mode available in config.
-const VIRTIO_BLK_F_CONFIG_WCE: usize = 11;
-// Support more than one vq.
-const VIRTIO_BLK_F_MQ: usize = 12;
-const VIRTIO_F_ANY_LAYOUT: usize = 27;
-const VIRTIO_RING_F_INDIRECT_DESC: usize = 28;
-const VIRTIO_RING_F_EVENT_IDX: usize = 29;
-
-// This many virtio descriptors, must be a power of two.
-// This must also fit into a `u16` as that is the maximum index allowed in the
-// descriptor table.
-const NUM: usize = 8;
-// Virtio sector size.
-const SSIZE: usize = 512;
-
-// A single descriptor, from virtio spec.
-#[repr(C)]
-struct VirtqDesc {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
-}
-// Chained with another descriptor.
-const VRING_DESC_F_NEXT: u16 = 1;
-// Device writes (vs read).
-const VRING_DESC_F_WRITE: u16 = 2;
-// the (entire) avail ring, from the spec.
-
-#[repr(C, packed)]
-struct VirtqAvail {
-    // Always zero.
-    flags: u16,
-    // Driver will write ring[idx] next.
-    idx: u16,
-    // Descriptor numbers of chain heads.
-    ring: [u16; NUM],
-    unused: u16,
-}
-
-// One entry in the "used" ring, with which the device tells the driver about
-// completed requests.
-#[repr(C)]
-struct VirtqUsedElem {
-    // Index of start of completed descriptor chain.
-    id: u32,
-    len: u32,
-}
-
-#[repr(C)]
-struct VirtqUsed {
-    // Always zero.
-    flags: u16,
-    // Device increments when it adds a ring[] entry.
-    idx: u16,
-    ring: [VirtqUsedElem; NUM],
-}
-
-// These are specific to virtio block devices, e.g. disks, described in Section
-// 5.2 of the spec.
-// Read the disk.
-const VIRTIO_BLK_T_IN: u32 = 0;
-// Write the disk.
-const VIRTIO_BLK_T_OUT: u32 = 1;
-
-// The format of the first descriptor in a disk request. To be followed by two
-// more descriptors containing the block, and a one-byte status.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct VirtioBlkReq {
-    // VIRTIO_BLK_T_IN or ..._OUT
-    r#type: u32,
-    reserved: u32,
-    sector: u64,
-}
-
-impl VirtioBlkReq {
-    const fn new() -> Self {
-        VirtioBlkReq {
-            r#type: 0,
-            reserved: 0,
-            sector: 0,
+    // Allocate the three descriptors.
+    let idx: [u16; 3];
+    loop {
+        match unsafe { (*disk).alloc3_desc(&tk) } {
+            Some(_idx) => {
+                idx = _idx;
+                break;
+            }
+            None => sleep(Channel::VirtioDescFree),
         }
+    }
+
+    // Format the three descriptors. Qemu's virtio-blk.c reads them.
+    let buf0_addr = unsafe {
+        let buf0 = &mut (*disk).ops[idx[0] as usize];
+        if write {
+            buf0.r#type = VIRTIO_BLK_T_OUT;
+        } else {
+            buf0.r#type = VIRTIO_BLK_T_IN;
+        }
+        buf0.reserved = 0;
+        buf0.sector = sector;
+        arch::ptr_address(buf0 as *const VirtioBlkReq)
+    };
+
+    let desc = unsafe { &mut (*disk).desc.as_mut_ref()[idx[0] as usize] };
+    desc.addr = buf0_addr as u64;
+    desc.len = size_of::<VirtioBlkReq>() as u32;
+    desc.flags = VRING_DESC_F_NEXT;
+    desc.next = idx[1];
+
+    let desc = unsafe { &mut (*disk).desc.as_mut_ref()[idx[1] as usize] };
+    desc.addr = arch::ptr_address(unsafe { &(*buf).data }) as u64;
+    desc.len = BSIZE as u32;
+    desc.flags = if write {
+        // Device reads from buf.data.
+        0
+    } else {
+        // Device writes to buf.data.
+        VRING_DESC_F_WRITE
+    };
+    desc.next = idx[2];
+
+    let desc = unsafe { &mut (*disk).desc.as_mut_ref()[idx[2] as usize] };
+    let status_addr = unsafe {
+        let status = &mut (*disk).info[idx[0] as usize].status;
+        *status = 0xff;
+        arch::ptr_address(status)
+    };
+    desc.addr = status_addr as u64;
+    desc.len = 1;
+    // Device writes the status.
+    desc.flags = VRING_DESC_F_WRITE;
+    desc.next = 0;
+
+    // Record the struct buf for virtio_disk_intr().
+    unsafe {
+        (*buf).disk = true;
+        (*disk).info[idx[0] as usize].buf = buf;
+    }
+
+    // Tell the device the first index in our chain of descriptors.
+    unsafe {
+        let _idx = ((*disk).avail.as_ref().idx % (NUM as u16)) as usize;
+        (*disk).avail.as_mut_ref().ring[_idx] = idx[0];
+    }
+
+    fence(Ordering::SeqCst);
+    // Tell the device another avail ring entry is available.
+    unsafe {
+        (*disk).avail.as_mut_ref().idx += 1;
+    }
+    fence(Ordering::SeqCst);
+
+    // Value is the queue number.
+    write_reg(VIRTIO_MMIO_QUEUE_NOTIFY, 0);
+
+    // Wait for virtio_disk_intr() to say request has finished.
+    while unsafe { (*buf).disk } {
+        sleep(Channel::VirtioReqFinished);
+    }
+
+    // Cleanup.
+    unsafe {
+        (*disk).info[idx[0] as usize].buf = core::ptr::null_mut();
+        (*disk).free_chain(idx[0], &tk);
+        (*disk).lock.release(tk);
+    }
+}
+
+pub fn virtio_disk_intr() {
+    let disk = &raw mut DISK;
+    let tk = unsafe { (*disk).lock.acquire() };
+
+    // The device won't raise another interrupt until we tell it we've seen
+    // this interrupt, which the following line does. This may race with the
+    // device writing new entries to the "used" ring, in which case we may
+    // process the new completion entries in this interrupt, and have nothing
+    // to do in the next interrupt, which is harmless.
+    let status = read_reg(VIRTIO_MMIO_INTERRUPT_STATUS) & 0x3;
+    write_reg(VIRTIO_MMIO_INTERRUPT_ACK, status);
+
+    fence(Ordering::SeqCst);
+
+    // The device increments disk.used.idx when it adds an entry to the used
+    // ring.
+    unsafe {
+        while (*disk).used_idx != (*disk).used.as_ref().idx {
+            fence(Ordering::SeqCst);
+            let ring_id = (*disk).used_idx as usize % NUM;
+            let id = (*disk).used.as_ref().ring[ring_id].id as usize;
+
+            if (*disk).info[id].status != 0 {
+                panic!("virtio_disk_intr status");
+            }
+
+            let buf = (*disk).info[id].buf;
+            // Disk is done with buf.
+            (*buf).disk = false;
+            wakeup(Channel::VirtioReqFinished);
+
+            (*disk).used_idx += 1;
+        }
+
+        (*disk).lock.release(tk);
     }
 }
 
@@ -285,25 +286,21 @@ impl<T> VSList<T> {
         self.page.as_ref().unwrap()
     }
 
-    fn read(&self, ind: usize) -> &T {
-        let s_size = size_of::<T>();
-        let s_ptr = (self.get_page().get_addr() + s_size * ind) as *const T;
+    fn as_ref(&self) -> &T {
+        let s_ptr = self.get_page().get_addr() as *const T;
         unsafe { &*s_ptr }
     }
 
-    fn write(&self, ind: usize, s: T) {
-        let s_size = size_of::<T>();
-        let s_ptr = (self.get_page().get_addr() + s_size * ind) as *mut T;
-        unsafe {
-            s_ptr.write_volatile(s);
-        }
+    fn as_mut_ref(&mut self) -> &mut T {
+        let s_ptr = self.get_page().get_addr() as *mut T;
+        unsafe { &mut (*s_ptr) }
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct DiskInfo {
-    buf: *const Buf,
+    buf: *mut Buf,
     status: u8,
 }
 
@@ -312,7 +309,7 @@ struct Disk {
     // device where to read and write individual disk operations. There are
     // `NUM` descriptors. Most commands consist of a "chain" (a linked list) of
     // a coupe of these descriptors.
-    desc: VSList<VirtqDesc>,
+    desc: VSList<[VirtqDesc; NUM]>,
     // A ring in which the driver writes descriptor numbers that the driver
     // would like the device to process. It only includes the head descriptor
     // of each chain. The ring has `NUM` elements.
@@ -346,7 +343,7 @@ static mut DISK: Disk = Disk {
     free: [false; NUM],
     used_idx: 0,
     info: [DiskInfo {
-        buf: core::ptr::null(),
+        buf: core::ptr::null_mut(),
         status: 0,
     }; NUM],
     ops: [VirtioBlkReq::new(); NUM],
@@ -376,13 +373,11 @@ impl Disk {
             panic!("free_desc 2");
         }
 
-        let desc = VirtqDesc {
-            addr: 0,
-            len: 0,
-            flags: 0,
-            next: 0,
-        };
-        self.desc.write(idx, desc);
+        let desc = &mut self.desc.as_mut_ref()[idx];
+        desc.addr = 0;
+        desc.len = 0;
+        desc.flags = 0;
+        desc.next = 0;
         self.free[idx] = true;
         wakeup(Channel::VirtioDescFree);
     }
@@ -390,9 +385,9 @@ impl Disk {
     // Free a chain of descriptors.
     fn free_chain(&mut self, mut idx: u16, tk: &SpinlockToken) {
         loop {
-            let tmp_desc = self.desc.read(idx as usize);
-            let flag = tmp_desc.flags;
-            let nxt = tmp_desc.next;
+            let desc = &mut self.desc.as_mut_ref()[idx as usize];
+            let flag = desc.flags;
+            let nxt = desc.next;
             self.free_desc(idx, tk);
             if flag & (VRING_DESC_F_NEXT as u16) != 0 {
                 idx = nxt;
@@ -420,117 +415,6 @@ impl Disk {
             }
         }
         Some(idx)
-    }
-}
-
-fn virtio_disk_rw(buf: *mut Buf, write: bool) {
-    let sector = unsafe { ((*buf).blockno as usize * (BSIZE / SSIZE)) as u64 };
-    let disk = &raw mut DISK;
-    let tk = unsafe { (*disk).lock.acquire() };
-
-    // The virtio spec's Section 5.2 says that legacy block operations use
-    // three descriptors: one for type/reserved/sector, one for the data,
-    // one for a 1-byte status result.
-
-    // Allocate the three descriptors.
-    let idx: [u16; 3];
-    loop {
-        match unsafe { (*disk).alloc3_desc(&tk) } {
-            Some(_idx) => {
-                idx = _idx;
-                break;
-            }
-            None => sleep(Channel::VirtioDescFree),
-        }
-    }
-
-    // Format the three descriptors. Qemu's virtio-blk.c reads them.
-    let buf0_addr = unsafe {
-        let buf0 = &mut (*disk).ops[idx[0] as usize];
-        if write {
-            buf0.r#type = VIRTIO_BLK_T_OUT;
-        } else {
-            buf0.r#type = VIRTIO_BLK_T_IN;
-        }
-        buf0.reserved = 0;
-        buf0.sector = sector;
-        arch::ptr_address(buf0 as *const VirtioBlkReq)
-    };
-
-    let desc = VirtqDesc {
-        addr: buf0_addr as u64,
-        len: size_of::<VirtioBlkReq>() as u32,
-        flags: VRING_DESC_F_NEXT,
-        next: idx[1],
-    };
-    unsafe {
-        (*disk).desc.write(idx[0] as usize, desc);
-    }
-
-    let desc = VirtqDesc {
-        addr: arch::ptr_address(unsafe { &(*buf).data }) as u64,
-        len: BSIZE as u32,
-        flags: if write {
-            // Device reads from buf.data.
-            0
-        } else {
-            // Device writes to buf.data.
-            VRING_DESC_F_WRITE
-        },
-        next: idx[2],
-    };
-    unsafe {
-        (*disk).desc.write(idx[1] as usize, desc);
-    }
-
-    let status_addr = unsafe {
-        let status = &mut (*disk).info[idx[0] as usize].status;
-        *status = 0xff;
-        arch::ptr_address(status)
-    };
-    let desc = VirtqDesc {
-        addr: status_addr as u64,
-        len: 1,
-        // Device writes the status.
-        flags: VRING_DESC_F_WRITE,
-        next: 0,
-    };
-    unsafe {
-        (*disk).desc.write(idx[2] as usize, desc);
-    }
-
-    // Record the struct buf for virtio_disk_intr().
-    unsafe {
-        (*buf).disk = true;
-        (*disk).info[idx[0] as usize].buf = buf;
-    }
-
-    // Tell the device the first index in our chain of descriptors.
-    unsafe {
-        let _idx = (*disk).avail.read(0).idx % (NUM as u16);
-        // (*disk).avail.ring[_idx] = idx[0];
-    }
-
-    fence(Ordering::SeqCst);
-    // Tell the device another avail ring entry is available.
-    unsafe {
-        //(*disk).avail.idx += 1;
-    }
-    fence(Ordering::SeqCst);
-
-    // Value is the queue number.
-    write_reg(VIRTIO_MMIO_QUEUE_NOTIFY, 0);
-
-    // Wait for virtio_disk_intr() to say request has finished.
-    while unsafe { (*buf).disk } {
-        sleep(Channel::VirtioReqFinished);
-    }
-
-    // Cleanup.
-    unsafe {
-        (*disk).info[idx[0] as usize].buf = core::ptr::null();
-        (*disk).free_chain(idx[0], &tk);
-        (*disk).lock.release(tk);
     }
 }
 

@@ -13,6 +13,11 @@ impl PhysPage {
     pub fn get_addr(&self) -> usize {
         arch::ptr_address(self.pa)
     }
+
+    /// Returns a pointer to the base of the page.
+    pub fn get_ptr(&self) -> *mut u8 {
+        self.pa
+    }
 }
 
 /// Allocate one page of physical memory.

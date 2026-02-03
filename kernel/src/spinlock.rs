@@ -45,7 +45,7 @@ impl Spinlock {
 
     // Acquire the lock.
     // Loops (spins) until the lock is acquired.
-    fn acquire(&self) -> SpinlockToken {
+    pub fn acquire(&self) -> SpinlockToken {
         // Disable interrupts to avoid deadlock.
         kutils::push_intr_off();
         if self.holding() {
@@ -62,7 +62,7 @@ impl Spinlock {
     }
 
     // Release the lock.
-    fn release(&self, _: SpinlockToken) {
+    pub fn release(&self, _: SpinlockToken) {
         self.cpuid.set(None);
 
         // Use atomic assignment instruction.

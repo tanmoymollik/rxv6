@@ -4,6 +4,8 @@
 #![feature(decl_macro)]
 
 mod arch;
+mod buf;
+mod channel;
 mod console;
 mod cpu;
 mod drivers;
@@ -16,6 +18,7 @@ mod memlayout;
 mod param;
 mod plic;
 mod print;
+mod proc;
 mod spinlock;
 mod trap;
 

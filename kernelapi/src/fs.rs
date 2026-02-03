@@ -3,7 +3,7 @@ use core::slice;
 
 /// On-disk file system format.
 
-/// Block size.
+/// Block size. Must be a multiple of 512.
 pub const BSIZE: usize = 1024;
 
 #[repr(C)]

@@ -1,12 +1,10 @@
+use super::Intr;
 use core::arch::asm;
 
 pub struct RiscVArch;
 
 impl super::Arch for RiscVArch {
     fn start(main: fn() -> !) -> ! {
-        // Set Machine Exception Program Counter to main(), for mret.
-        w_mepc(main as usize);
-
         // Disable paging for now.
         w_satp(0);
 
@@ -34,6 +32,8 @@ impl super::Arch for RiscVArch {
         // Keep each CPU's hartid in its tp register, for cpuid().
         w_tp(r_mhartid());
 
+        // Set Machine Exception Program Counter to main(), for mret.
+        w_mepc(main as usize);
         let mut x = r_mstatus();
         // Clear Machine Previous Privilege mode.
         x &= !MSTATUS_MPP_MASK;
@@ -82,6 +82,41 @@ impl super::Arch for RiscVArch {
     #[inline(always)]
     fn page_size() -> usize {
         4096
+    }
+
+    fn kernel_trap() {
+        let sepc = r_sepc();
+        let sstatus = r_sstatus();
+        let scause = r_scause();
+
+        if sstatus & SSTATUS_SPP == 0 {
+            panic!("kerneltrap: not from supervisor mode");
+        }
+        if Self::interrupts_enabled() {
+            panic!("kerneltrap: interrupts enabled");
+        }
+
+        match Self::dev_intr() {
+            Intr::Unrecognized => {
+                panic!(
+                    "kerneltrap: scause=0x{:x} sepc=0x{:x} stval=0x{:x}",
+                    scause,
+                    sepc,
+                    r_stval()
+                );
+            }
+            _ => (),
+        }
+
+        // TODO(): Add a yield here when schedular is done.
+    }
+
+    fn dev_intr() -> Intr {
+        match r_scause() {
+            SCAUSE_PLIC => Intr::External,
+            SCAUSE_TIMER => Intr::Timer,
+            _ => Intr::Unrecognized,
+        }
     }
 }
 
@@ -158,6 +193,8 @@ define_read_csr!(time);
 // Supervisor Status register, sstatus.
 define_read_csr!(sstatus);
 define_write_csr!(sstatus);
+// Previous mode, 1=Supervisor, 0=User
+const SSTATUS_SPP: usize = 1 << 8;
 // Supervisor interrupt enable.
 const SSTATUS_SIE: usize = 1 << 1;
 
@@ -178,6 +215,19 @@ define_write_csr!(stimecmp);
 
 // Supervisor Trap Vector, stvec.
 define_write_csr!(stvec);
+
+// Supervisor Trap Value, stval.
+define_read_csr!(stval);
+
+// Supervisor Trap Cause, scause.
+define_read_csr!(scause);
+pub const SCAUSE_PLIC: usize = 0x8000000000000009;
+pub const SCAUSE_TIMER: usize = 0x8000000000000005;
+
+// Supervisor Exception Program Counter, sepc.
+// Holds the instruction address to which a return from exception will go.
+define_read_csr!(sepc);
+define_write_csr!(sepc);
 
 // Physical Memory Protection csrs.
 define_write_csr!(pmpaddr0);

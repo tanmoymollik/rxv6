@@ -71,7 +71,7 @@ unsafe extern "C" {
 }
 
 #[inline(always)]
-fn end_addr() -> usize {
+pub fn end_addr() -> usize {
     unsafe { arch::ptr_address(end.as_ptr()) }
 }
 

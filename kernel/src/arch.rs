@@ -1,5 +1,12 @@
 mod riscv;
 
+/// Interrupt type.
+pub enum Intr {
+    Timer,
+    External,
+    Unrecognized,
+}
+
 pub trait Arch {
     fn start(_: fn() -> !) -> !;
     fn cpuid() -> usize;
@@ -11,6 +18,9 @@ pub trait Arch {
     /// will halt indefinitely.
     fn halt() -> !;
     fn page_size() -> usize;
+    fn kernel_trap();
+    /// Returns the type of the interrupt.
+    fn dev_intr() -> Intr;
 }
 
 pub type CurrentArch = riscv::RiscVArch;

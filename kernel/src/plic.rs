@@ -1,5 +1,3 @@
-use core::mem;
-
 use crate::arch::{Arch, CurrentArch};
 use crate::memlayout;
 

@@ -29,7 +29,7 @@ kernelvec:
     sd t6, 232(sp)
 
     # Call the trap handler in Rust. Defined in src/trap.rs.
-    call {kerneltrap}
+    call {kernel_trap}
 
     # Restore registers.
     sd ra, 0(sp)

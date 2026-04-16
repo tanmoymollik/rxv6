@@ -51,6 +51,10 @@ pub fn putc_sync(c: u8) {
     }
 }
 
+pub fn uart_intr() {
+    unimplemented!("uartintr");
+}
+
 // The UART control registers are memory-mapped at address `memlayout::UART0`.
 // This macro returns the address of one of the registers.
 #[inline(always)]

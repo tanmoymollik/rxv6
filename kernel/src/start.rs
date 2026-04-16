@@ -4,12 +4,14 @@
 #![feature(decl_macro)]
 
 mod arch;
+mod bio;
 mod buf;
 mod channel;
 mod console;
 mod cpu;
 mod drivers;
 mod elf;
+mod fs;
 mod kalloc;
 mod kmain;
 mod kstate;

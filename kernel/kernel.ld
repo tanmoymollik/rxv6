@@ -48,8 +48,8 @@ SECTIONS
      */
     .stack0 (NOLOAD) : {
         . = ALIGN(0x1000);
-        . += NCPU * 0x1000;
         PROVIDE(stack0 = .);
+        . += NCPU * 0x1000;
     }
 
     PROVIDE(end = .);

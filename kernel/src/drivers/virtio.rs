@@ -117,10 +117,10 @@ pub fn virtio_disk_init() {
     // plic.rs and trap.rs arrange for interrupts from `VIRTIO0_IRQ`.
 }
 
-pub fn virtio_disk_rw(buf: *mut Buf, write: bool) {
+pub fn disk_rw(buf: *mut Buf, write: bool) {
     let sector = unsafe { ((*buf).blockno as usize * (BSIZE / SSIZE)) as u64 };
     let disk = &raw mut DISK;
-    let tk = unsafe { (*disk).lock.acquire() };
+    let mut tk = unsafe { (*disk).lock.acquire() };
 
     // The virtio spec's Section 5.2 says that legacy block operations use
     // three descriptors: one for type/reserved/sector, one for the data,
@@ -134,7 +134,9 @@ pub fn virtio_disk_rw(buf: *mut Buf, write: bool) {
                 idx = _idx;
                 break;
             }
-            None => sleep(Channel::VirtioDescFree),
+            None => unsafe {
+                tk = sleep(Channel::VirtioDescFree, &(*disk).lock, tk);
+            },
         }
     }
 
@@ -205,7 +207,9 @@ pub fn virtio_disk_rw(buf: *mut Buf, write: bool) {
 
     // Wait for virtio_disk_intr() to say request has finished.
     while unsafe { (*buf).disk } {
-        sleep(Channel::VirtioReqFinished);
+        unsafe {
+            tk = sleep(Channel::VirtioReqFinished, &(*disk).lock, tk);
+        }
     }
 
     // Cleanup.
@@ -216,7 +220,7 @@ pub fn virtio_disk_rw(buf: *mut Buf, write: bool) {
     }
 }
 
-pub fn virtio_disk_intr() {
+pub fn disk_intr() {
     let disk = &raw mut DISK;
     let tk = unsafe { (*disk).lock.acquire() };
 
@@ -255,7 +259,7 @@ pub fn virtio_disk_intr() {
 }
 
 // A wrapper class that owns a page worth of memory and provides a functional
-// interface of a list (or ring) of virtq device structs.
+// interface of virtq device struct type - `T`.
 struct VSList<T: Sized> {
     page: Option<PhysPage>,
     _ph: PhantomData<T>,
@@ -270,6 +274,10 @@ impl<T> VSList<T> {
     }
 
     fn new(page: PhysPage) -> Self {
+        if CurrentArch::page_size() < size_of::<T>() {
+            panic!("virtio_disk - VSList larger than page size.");
+        }
+
         unsafe {
             page.get_ptr().write_bytes(0, CurrentArch::page_size());
         }
